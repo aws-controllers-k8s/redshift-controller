@@ -5,7 +5,6 @@ ignore:
       - ClusterParameterGroup
       - ClusterSecurityGroup
       - ClusterSnapshot
-      - ClusterSubnetGroup
       - CustomDomainAssociation
       - EndpointAccess
       - EventSubscription
@@ -18,3 +17,34 @@ ignore:
       - SnapshotCopyGrant
       - SnapshotSchedule
       - UsageLimit
+resources:
+  ClusterSubnetGroup:
+    fields:
+      Name:
+        is_primary_key: true
+        is_immutable: true
+      Tags:
+        custom_sync: {}
+    renames:
+      operations:
+        CreateClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+        DescribeClusterSubnetGroups:
+          input_fields:
+            ClusterSubnetGroupName: Name
+        ModifyClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+        DeleteClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+    exceptions:
+      errors:
+        404:
+          code: ClusterSubnetGroupNotFoundFault
+      terminal_codes:
+        - ClusterSubnetGroupQuotaExceeded
+        - ClusterSubnetQuotaExceededFault
+        - InvalidSubnet
+        - ClusterSubnetGroupAlreadyExists
