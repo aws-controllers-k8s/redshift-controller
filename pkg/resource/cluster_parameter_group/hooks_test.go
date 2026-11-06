@@ -14,11 +14,9 @@
 package cluster_parameter_group
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -167,63 +165,6 @@ func TestNewModifyParametersInput(t *testing.T) {
 	}
 }
 
-func TestHasUpperCase(t *testing.T) {
-	for _, tc := range []struct {
-		name *string
-		want bool
-	}{
-		{nil, false},
-		{aws.String(""), false},
-		{aws.String("abc-1"), false},
-		{aws.String("Abc"), true},
-		{aws.String("ABC"), true},
-		{aws.String("abc-D"), true},
-	} {
-		if got := hasUpperCase(tc.name); got != tc.want {
-			t.Errorf("hasUpperCase(%q) = %v, want %v", aws.ToString(tc.name), got, tc.want)
-		}
-	}
-}
-
-func TestValidateParameterGroupName(t *testing.T) {
-	for _, name := range []*string{nil, aws.String("abc-1")} {
-		if err := validateParameterGroupName(name); err != nil {
-			t.Errorf("validateParameterGroupName(%q) = %v, want nil", aws.ToString(name), err)
-		}
-	}
-	err := validateParameterGroupName(aws.String("My-Group"))
-	var terminal *ackerr.TerminalError
-	if !errors.As(err, &terminal) {
-		t.Fatalf("got %v, want a *ackerr.TerminalError", err)
-	}
-	for _, want := range []string{"spec.name is immutable", `"my-group"`} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not contain %q", err.Error(), want)
-		}
-	}
-}
-
-// TestUpperCaseNameGuards exercises the generated wiring of both hooks: each
-// must return before any AWS call, so a zero-value resourceManager suffices.
-func TestUpperCaseNameGuards(t *testing.T) {
-	res := func(name string) *resource {
-		return &resource{&svcapitypes.ClusterParameterGroup{
-			Spec: svcapitypes.ClusterParameterGroupSpec{Name: aws.String(name)},
-		}}
-	}
-	rm := &resourceManager{}
-	ctx := context.Background()
-
-	if _, err := rm.sdkFind(ctx, res("Foo")); err != ackerr.NotFound {
-		t.Errorf("sdkFind = %v, want ackerr.NotFound", err)
-	}
-	_, err := rm.sdkCreate(ctx, res("Foo"))
-	var terminal *ackerr.TerminalError
-	if !errors.As(err, &terminal) {
-		t.Errorf("sdkCreate = %v, want a *ackerr.TerminalError", err)
-	}
-}
-
 func TestFilterParameters(t *testing.T) {
 	params := []svcsdktypes.Parameter{
 		{ParameterName: aws.String("z_user"), ParameterValue: aws.String("1"), Source: aws.String("user"),
@@ -276,5 +217,14 @@ func TestRequeueAfterParameterSync(t *testing.T) {
 	var terminal *ackerr.TerminalError
 	if errors.As(requeueWaitAfterParameterSync, &terminal) {
 		t.Errorf("classified as terminal")
+	}
+}
+
+func TestParameterGroupARN(t *testing.T) {
+	rm := &resourceManager{awsPartition: "aws", awsRegion: "us-west-2", awsAccountID: "123456789012"}
+	got := rm.parameterGroupARN("My-Group")
+	want := "arn:aws:redshift:us-west-2:123456789012:parametergroup:my-group"
+	if got != want {
+		t.Errorf("parameterGroupARN = %q, want %q", got, want)
 	}
 }

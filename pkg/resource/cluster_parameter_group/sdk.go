@@ -63,13 +63,6 @@ func (rm *resourceManager) sdkFind(
 	defer func() {
 		exit(err)
 	}()
-	// Redshift stores group names in lower case, so an upper-case spec.name
-	// can never own a group; report NotFound rather than risk binding to the
-	// lower-case group of the same name.
-	if hasUpperCase(r.ko.Spec.Name) {
-		return nil, ackerr.NotFound
-	}
-
 	// If any required fields in the input shape are missing, AWS resource is
 	// not created yet. Return NotFound here to indicate to callers that the
 	// resource isn't yet created.
@@ -108,11 +101,6 @@ func (rm *resourceManager) sdkFind(
 		} else {
 			ko.Spec.Family = nil
 		}
-		if elem.ParameterGroupName != nil {
-			ko.Spec.Name = elem.ParameterGroupName
-		} else {
-			ko.Spec.Name = nil
-		}
 		if elem.Tags != nil {
 			f3 := []*svcapitypes.Tag{}
 			for _, f3iter := range elem.Tags {
@@ -137,6 +125,15 @@ func (rm *resourceManager) sdkFind(
 	}
 
 	rm.setStatusDefaults(ko)
+	// DescribeClusterParameterGroups does not return an ARN, so build it from
+	// the group name (lowercased, as stored by Redshift).
+	if ko.Spec.Name != nil {
+		if ko.Status.ACKResourceMetadata == nil {
+			ko.Status.ACKResourceMetadata = &ackv1alpha1.ResourceMetadata{}
+		}
+		arn := ackv1alpha1.AWSResourceName(rm.parameterGroupARN(*ko.Spec.Name))
+		ko.Status.ACKResourceMetadata.ARN = &arn
+	}
 	// DescribeClusterParameterGroups does not return parameter values, so read
 	// them with DescribeClusterParameters.
 	overrides, statuses, err := rm.getParameterOverrides(ctx, ko.Spec.Name, r.ko.Spec.ParameterOverrides)
@@ -185,10 +182,6 @@ func (rm *resourceManager) sdkCreate(
 	defer func() {
 		exit(err)
 	}()
-	if err = validateParameterGroupName(desired.ko.Spec.Name); err != nil {
-		return nil, err
-	}
-
 	input, err := rm.newCreateRequestPayload(ctx, desired)
 	if err != nil {
 		return nil, err
@@ -214,11 +207,6 @@ func (rm *resourceManager) sdkCreate(
 		ko.Spec.Family = resp.ClusterParameterGroup.ParameterGroupFamily
 	} else {
 		ko.Spec.Family = nil
-	}
-	if resp.ClusterParameterGroup.ParameterGroupName != nil {
-		ko.Spec.Name = resp.ClusterParameterGroup.ParameterGroupName
-	} else {
-		ko.Spec.Name = nil
 	}
 	if resp.ClusterParameterGroup.Tags != nil {
 		f3 := []*svcapitypes.Tag{}
@@ -453,9 +441,7 @@ func (rm *resourceManager) terminalAWSError(err error) bool {
 		return false
 	}
 	switch terminalErr.ErrorCode() {
-	case "ClusterParameterGroupAlreadyExists",
-		"ClusterParameterGroupQuotaExceeded",
-		"InvalidTagFault",
+	case "InvalidTagFault",
 		"TagLimitExceededFault",
 		"InvalidParameterValue":
 		return true

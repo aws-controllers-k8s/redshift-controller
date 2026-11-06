@@ -42,20 +42,14 @@ var (
 	requeueWaitAfterParameterSync = ackrequeue.NeededAfter(errParametersModified, 5*time.Second)
 )
 
-// hasUpperCase reports whether name contains upper-case letters.
-func hasUpperCase(name *string) bool {
-	return name != nil && strings.ToLower(*name) != *name
-}
-
-// validateParameterGroupName rejects an upper-case name before create: Redshift
-// stores group names in lower case, so such a CR would never sync.
-func validateParameterGroupName(name *string) error {
-	if !hasUpperCase(name) {
-		return nil
-	}
-	return ackerr.NewTerminalError(fmt.Errorf(
-		"spec.name %q contains upper-case letters; Redshift stores parameter group names in lower case, so the resource would never sync. spec.name is immutable; delete and recreate the resource with %q",
-		*name, strings.ToLower(*name)))
+// parameterGroupARN returns the ARN of the cluster parameter group with the
+// given name. DescribeClusterParameterGroups does not return an ARN, so it is
+// built from the resource manager's partition, region and account. Redshift
+// stores parameter group names in lower case, so the name is lowercased to
+// match the ARN the service uses.
+func (rm *resourceManager) parameterGroupARN(name string) string {
+	return fmt.Sprintf("arn:%s:redshift:%s:%s:parametergroup:%s",
+		rm.awsPartition, rm.awsRegion, rm.awsAccountID, strings.ToLower(name))
 }
 
 // customUpdateClusterParameterGroup replaces the generated single Modify call
@@ -93,8 +87,7 @@ func (rm *resourceManager) customUpdateClusterParameterGroup(
 }
 
 // syncTags applies the tag diff between desired and latest with
-// CreateTags/DeleteTags. DescribeClusterParameterGroups returns no ARN, so the
-// ARN is built from the resource metadata and the group name.
+// CreateTags/DeleteTags.
 func (rm *resourceManager) syncTags(
 	ctx context.Context,
 	desired *resource,
@@ -106,23 +99,12 @@ func (rm *resourceManager) syncTags(
 		exit(err)
 	}()
 
-	var arn string
-	if desired.ko.Status.ACKResourceMetadata != nil && desired.ko.Status.ACKResourceMetadata.ARN != nil {
-		arn = string(*desired.ko.Status.ACKResourceMetadata.ARN)
-	} else {
-		md := desired.ko.Status.ACKResourceMetadata
-		if md == nil {
-			md = latest.ko.Status.ACKResourceMetadata
-		}
-		if md == nil || md.OwnerAccountID == nil || md.Region == nil || md.Partition == nil {
-			return fmt.Errorf("cannot sync tags: resource metadata is not available")
-		}
-		if desired.ko.Spec.Name == nil {
-			return fmt.Errorf("cannot sync tags: resource name is not available")
-		}
-		arn = fmt.Sprintf("arn:%s:redshift:%s:%s:parametergroup:%s",
-			*md.Partition, *md.Region, *md.OwnerAccountID, *desired.ko.Spec.Name)
+	// The ARN is set on Status.ACKResourceMetadata by sdkFind
+	// (see templates/hooks/cluster_parameter_group/sdk_read_many_post_set_output.go.tpl).
+	if latest.ko.Status.ACKResourceMetadata == nil || latest.ko.Status.ACKResourceMetadata.ARN == nil {
+		return fmt.Errorf("cannot sync tags: resource ARN is not available")
 	}
+	arn := string(*latest.ko.Status.ACKResourceMetadata.ARN)
 
 	desiredTags, _ := convertToOrderedACKTags(desired.ko.Spec.Tags)
 	latestTags, _ := convertToOrderedACKTags(latest.ko.Spec.Tags)

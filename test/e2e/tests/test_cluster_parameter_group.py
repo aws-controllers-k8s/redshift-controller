@@ -13,7 +13,6 @@
 
 """Integration tests for the Redshift ClusterParameterGroup resource."""
 
-import copy
 import json
 import logging
 import time
@@ -134,189 +133,250 @@ def patch_and_assert_synced(ref, patch):
     )
 
 
+def make_parameter_group(redshift_client, spec_name=None):
+    """Build the CR for a new parameter group and the values the test checks.
+
+    spec_name overrides spec.name (metadata.name must stay lower case)."""
+    family = get_family(redshift_client)
+    defaults = get_default_parameters(redshift_client, family)
+    for p in (STATEMENT_TIMEOUT, USER_ACTIVITY_LOGGING, WLM_JSON_CONFIGURATION):
+        assert p in defaults, f"{p} missing from {family} defaults"
+        assert defaults[p]["IsModifiable"], f"{p} is not modifiable"
+
+    timeout_default = defaults[STATEMENT_TIMEOUT].get("ParameterValue")
+    logging_default = defaults[USER_ACTIVITY_LOGGING].get("ParameterValue")
+    values = {
+        "family": family,
+        "defaults": defaults,
+        "description": "ACK test cluster parameter group",
+        "timeout_1": pick_different(timeout_default, "30000", "45000"),
+        "timeout_2": pick_different(timeout_default, "60000", "75000"),
+        "logging_default": logging_default,
+        "logging_value": "true" if logging_default == "false" else "false",
+        "wlm_value": pick_different(
+            defaults[WLM_JSON_CONFIGURATION].get("ParameterValue"), WLM_VALUE,
+        ),
+    }
+
+    resource_name = random_suffix_name("ack-test-cpg", 24)
+    replacements = REPLACEMENT_VALUES.copy()
+    replacements["CLUSTER_PARAMETER_GROUP_NAME"] = resource_name
+    replacements["FAMILY"] = family
+    replacements["DESCRIPTION"] = values["description"]
+    replacements["PARAM_STATEMENT_TIMEOUT"] = values["timeout_1"]
+    replacements["PARAM_ENABLE_USER_ACTIVITY_LOGGING"] = values["logging_value"]
+    resource_data = load_redshift_resource(
+        "cluster_parameter_group",
+        additional_replacements=replacements,
+    )
+    if spec_name is not None:
+        resource_data["spec"]["name"] = spec_name
+    values["aws_name"] = resource_data["spec"]["name"].lower()
+
+    ref = k8s.CustomResourceReference(
+        CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
+        resource_name, namespace="default",
+    )
+    return ref, resource_data, values
+
+
+def create_parameter_group(ref, resource_data):
+    logging.info(f"Creating ClusterParameterGroup {resource_data['spec']['name']}")
+    k8s.create_custom_resource(ref, resource_data)
+    cr = k8s.wait_resource_consumed_by_controller(ref)
+    assert cr is not None
+    assert k8s.get_resource_exists(ref)
+
+
+def cleanup_parameter_group(ref):
+    # Clean up in case the test failed before its own delete step.
+    if k8s.get_resource_exists(ref):
+        _, deleted = k8s.delete_custom_resource(
+            ref, wait_periods=SYNC_WAIT_PERIODS, period_length=5,
+        )
+        assert deleted
+
+
+def delete_and_assert_gone(redshift_client, ref, aws_name):
+    _, deleted = k8s.delete_custom_resource(
+        ref, wait_periods=SYNC_WAIT_PERIODS, period_length=5,
+    )
+    assert deleted
+    time.sleep(DELETE_WAIT_AFTER_SECONDS)
+    assert not k8s.get_resource_exists(ref)
+    with pytest.raises(ClientError) as exc:
+        redshift_client.describe_cluster_parameter_groups(
+            ParameterGroupName=aws_name,
+        )
+    assert exc.value.response["Error"]["Code"] == "ClusterParameterGroupNotFound"
+
+
+def assert_aws_tags(redshift_client, aws_name, expected):
+    # assert_equal_without_ack_tags drops services.k8s.aws/* tags. The other
+    # helm resourceTags defaults (app.kubernetes.io/managed-by,
+    # kro.run/kro-version) are filled from CR labels and skipped when empty;
+    # these CRs carry no such labels.
+    group = get_aws_group(redshift_client, aws_name)
+    tagutil.assert_equal_without_ack_tags(
+        expected,
+        {t["Key"]: t["Value"] for t in group.get("Tags", [])},
+    )
+
+
+@pytest.fixture
+def parameter_group(redshift_client):
+    ref, resource_data, values = make_parameter_group(redshift_client)
+    try:
+        create_parameter_group(ref, resource_data)
+        yield ref, values
+    finally:
+        cleanup_parameter_group(ref)
+
+
+@pytest.fixture
+def upper_case_parameter_group(redshift_client):
+    # Redshift stores the name in lower case but matches it case-insensitively
+    # on Describe, so an upper-case spec.name is accepted as written.
+    name = random_suffix_name("ACK-Test-CPG-UC", 24)
+    ref, resource_data, values = make_parameter_group(redshift_client, spec_name=name)
+    try:
+        create_parameter_group(ref, resource_data)
+        yield ref, values
+    finally:
+        cleanup_parameter_group(ref)
+
+
 @service_marker
 @pytest.mark.canary
 class TestClusterParameterGroup:
-    def test_create_update_delete(self, redshift_client):
-        family = get_family(redshift_client)
-        defaults = get_default_parameters(redshift_client, family)
-        for p in (STATEMENT_TIMEOUT, USER_ACTIVITY_LOGGING, WLM_JSON_CONFIGURATION):
-            assert p in defaults, f"{p} missing from {family} defaults"
-            assert defaults[p]["IsModifiable"], f"{p} is not modifiable"
+    def test_create_update_delete(self, redshift_client, parameter_group):
+        ref, v = parameter_group
+        name = v["aws_name"]
 
-        timeout_default = defaults[STATEMENT_TIMEOUT].get("ParameterValue")
-        logging_default = defaults[USER_ACTIVITY_LOGGING].get("ParameterValue")
-        timeout_1 = pick_different(timeout_default, "30000", "45000")
-        timeout_2 = pick_different(timeout_default, "60000", "75000")
-        logging_value = "true" if logging_default == "false" else "false"
-        wlm_value = pick_different(
-            defaults[WLM_JSON_CONFIGURATION].get("ParameterValue"), WLM_VALUE,
+        # --- Create: description, parameters and tags reach AWS ---
+        assert_synced(ref)
+        group = get_aws_group(redshift_client, name)
+        assert group["ParameterGroupFamily"] == v["family"]
+        assert group["Description"] == v["description"]
+        assert_aws_tags(redshift_client, name, {"environment": "test", "team": "data"})
+        params = get_aws_parameters(redshift_client, name)
+        assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_1"]
+        assert params[STATEMENT_TIMEOUT]["Source"] == "user"
+        assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == v["logging_value"]
+        assert params[USER_ACTIVITY_LOGGING]["Source"] == "user"
+        cr = k8s.get_resource(ref)
+        assert cr["status"]["ackResourceMetadata"]["arn"].endswith(
+            f":parametergroup:{name}"
         )
+        statuses = status_by_name(cr)
+        assert set(statuses) == {STATEMENT_TIMEOUT, USER_ACTIVITY_LOGGING}
+        assert statuses[STATEMENT_TIMEOUT]["parameterValue"] == v["timeout_1"]
+        assert statuses[USER_ACTIVITY_LOGGING]["parameterValue"] == v["logging_value"]
+        for s in statuses.values():
+            assert s["source"] == "user"
+            assert s["isModifiable"] is True
+            assert s["applyType"] in {"static", "dynamic"}
 
-        resource_name = random_suffix_name("ack-test-cpg", 24)
-        description = "ACK test cluster parameter group"
-
-        replacements = REPLACEMENT_VALUES.copy()
-        replacements["CLUSTER_PARAMETER_GROUP_NAME"] = resource_name
-        replacements["FAMILY"] = family
-        replacements["DESCRIPTION"] = description
-        replacements["PARAM_STATEMENT_TIMEOUT"] = timeout_1
-        replacements["PARAM_ENABLE_USER_ACTIVITY_LOGGING"] = logging_value
-
-        resource_data = load_redshift_resource(
-            "cluster_parameter_group",
-            additional_replacements=replacements,
-        )
-        logging.info(f"Creating ClusterParameterGroup {resource_name}")
-
-        ref = k8s.CustomResourceReference(
-            CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
-            resource_name, namespace="default",
-        )
-        k8s.create_custom_resource(ref, resource_data)
-        cr = k8s.wait_resource_consumed_by_controller(ref)
-        assert cr is not None
-        assert k8s.get_resource_exists(ref)
-
-        try:
-            # --- Create: description, parameters and tags reach AWS ---
-            assert_synced(ref)
-            group = get_aws_group(redshift_client, resource_name)
-            assert group["ParameterGroupFamily"] == family
-            assert group["Description"] == description
-            # assert_equal_without_ack_tags drops services.k8s.aws/* tags. The
-            # other helm resourceTags defaults (app.kubernetes.io/managed-by,
-            # kro.run/kro-version) are filled from CR labels and skipped when
-            # empty; this CR carries no such labels.
-            tagutil.assert_equal_without_ack_tags(
-                {"environment": "test", "team": "data"},
-                {t["Key"]: t["Value"] for t in group.get("Tags", [])},
-            )
-            params = get_aws_parameters(redshift_client, resource_name)
-            assert params[STATEMENT_TIMEOUT]["ParameterValue"] == timeout_1
-            assert params[STATEMENT_TIMEOUT]["Source"] == "user"
-            assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == logging_value
-            assert params[USER_ACTIVITY_LOGGING]["Source"] == "user"
-            statuses = status_by_name(k8s.get_resource(ref))
-            assert set(statuses) == {STATEMENT_TIMEOUT, USER_ACTIVITY_LOGGING}
-            assert statuses[STATEMENT_TIMEOUT]["parameterValue"] == timeout_1
-            assert statuses[USER_ACTIVITY_LOGGING]["parameterValue"] == logging_value
-            for s in statuses.values():
-                assert s["source"] == "user"
-                assert s["isModifiable"] is True
-                assert s["applyType"] in {"static", "dynamic"}
-
-            # --- Upper-case spec.name: terminal, and the lower-case group is
-            # untouched. Redshift stores names in lower case, so without the
-            # guard this CR could bind to resource_name's group.
-            before = get_aws_parameters(redshift_client, resource_name)
-            uc_name = f"{resource_name}-uc"
-            uc_data = copy.deepcopy(resource_data)
-            uc_data["metadata"]["name"] = uc_name
-            uc_data["spec"]["name"] = resource_name.upper()
-            uc_data["spec"]["parameterOverrides"] = {STATEMENT_TIMEOUT: timeout_2}
-            uc_data["spec"].pop("tags", None)
-            uc_ref = k8s.CustomResourceReference(
-                CRD_GROUP, CRD_VERSION, RESOURCE_PLURAL,
-                uc_name, namespace="default",
-            )
-            k8s.create_custom_resource(uc_ref, uc_data)
-            try:
-                k8s.wait_resource_consumed_by_controller(uc_ref)
-                assert k8s.wait_on_condition(
-                    uc_ref, "ACK.Terminal", "True",
-                    wait_periods=SYNC_WAIT_PERIODS, period_length=SYNC_PERIOD_LENGTH,
-                )
-                terminal = k8s.get_resource_condition(uc_ref, "ACK.Terminal")
-                assert "upper-case" in terminal.get("message", "")
-                assert get_aws_parameters(redshift_client, resource_name) == before
-
-                _, deleted = k8s.delete_custom_resource(
-                    uc_ref, wait_periods=SYNC_WAIT_PERIODS, period_length=5,
-                )
-                assert deleted
-                assert not k8s.get_resource_exists(uc_ref)
-                get_aws_group(redshift_client, resource_name)
-            finally:
-                if k8s.get_resource_exists(uc_ref):
-                    k8s.delete_custom_resource(uc_ref)
-
-            # --- Update parameters: change one, remove the other ---
-            # A merge-patch null deletes the map key, which must reset that
-            # parameter alone and leave the changed one in place.
-            patch_and_assert_synced(ref, {
-                "spec": {
-                    "parameterOverrides": {
-                        STATEMENT_TIMEOUT: timeout_2,
-                        USER_ACTIVITY_LOGGING: None,
-                    },
+        # --- Update parameters: change one, remove the other ---
+        # A merge-patch null deletes the map key, which must reset that
+        # parameter alone and leave the changed one in place.
+        patch_and_assert_synced(ref, {
+            "spec": {
+                "parameterOverrides": {
+                    STATEMENT_TIMEOUT: v["timeout_2"],
+                    USER_ACTIVITY_LOGGING: None,
                 },
-            })
-            params = get_aws_parameters(redshift_client, resource_name)
-            assert params[STATEMENT_TIMEOUT]["ParameterValue"] == timeout_2
-            assert params[STATEMENT_TIMEOUT]["Source"] == "user"
-            assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == logging_default
-            assert params[USER_ACTIVITY_LOGGING]["Source"] == "engine-default"
-            # Without the post-sync requeue this would read the pre-update
-            # status (rds-controller#298).
-            statuses = status_by_name(k8s.get_resource(ref))
-            assert statuses[STATEMENT_TIMEOUT]["parameterValue"] == timeout_2
-            assert USER_ACTIVITY_LOGGING not in statuses
+            },
+        })
+        params = get_aws_parameters(redshift_client, name)
+        assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_2"]
+        assert params[STATEMENT_TIMEOUT]["Source"] == "user"
+        assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == v["logging_default"]
+        assert params[USER_ACTIVITY_LOGGING]["Source"] == "engine-default"
+        # Without the post-sync requeue this would read the pre-update
+        # status (rds-controller#298).
+        statuses = status_by_name(k8s.get_resource(ref))
+        assert statuses[STATEMENT_TIMEOUT]["parameterValue"] == v["timeout_2"]
+        assert USER_ACTIVITY_LOGGING not in statuses
 
-            # --- WLM JSON: AWS may re-serialize the body, which would make the
-            # string comparison loop instead of settling ---
-            assert defaults[WLM_JSON_CONFIGURATION]["IsModifiable"]
-            patch_and_assert_synced(ref, {
-                "spec": {"parameterOverrides": {WLM_JSON_CONFIGURATION: wlm_value}},
-            })
-            params = get_aws_parameters(redshift_client, resource_name)
-            observed = params[WLM_JSON_CONFIGURATION]["ParameterValue"]
-            assert json.loads(observed) == json.loads(wlm_value)
-            assert params[WLM_JSON_CONFIGURATION]["Source"] == "user"
-            logging.info(
-                f"wlm_json_configuration returned byte-identical: {observed == wlm_value}"
-            )
-            # Every reconcile clears conditions and stamps Synced with the
-            # current time, so an unchanged lastTransitionTime means no
-            # reconcile ran, i.e. no perpetual diff.
-            settled = condition.get_synced_last_transition_time(ref)
-            time.sleep(STABILITY_WAIT_SECONDS)
-            assert k8s.wait_on_condition(
-                ref, "ACK.ResourceSynced", "True", wait_periods=1, period_length=1,
-            )
-            assert condition.get_synced_last_transition_time(ref) == settled
-            statuses = status_by_name(k8s.get_resource(ref))
-            assert statuses[WLM_JSON_CONFIGURATION]["source"] == "user"
+        # --- WLM JSON: AWS may re-serialize the body, which would make the
+        # string comparison loop instead of settling ---
+        wlm_value = v["wlm_value"]
+        patch_and_assert_synced(ref, {
+            "spec": {"parameterOverrides": {WLM_JSON_CONFIGURATION: wlm_value}},
+        })
+        params = get_aws_parameters(redshift_client, name)
+        observed = params[WLM_JSON_CONFIGURATION]["ParameterValue"]
+        assert json.loads(observed) == json.loads(wlm_value)
+        assert params[WLM_JSON_CONFIGURATION]["Source"] == "user"
+        logging.info(
+            f"wlm_json_configuration returned byte-identical: {observed == wlm_value}"
+        )
+        # Every reconcile clears conditions and stamps Synced with the current
+        # time, so an unchanged lastTransitionTime means no reconcile ran,
+        # i.e. no perpetual diff.
+        settled = condition.get_synced_last_transition_time(ref)
+        time.sleep(STABILITY_WAIT_SECONDS)
+        assert k8s.wait_on_condition(
+            ref, "ACK.ResourceSynced", "True", wait_periods=1, period_length=1,
+        )
+        assert condition.get_synced_last_transition_time(ref) == settled
+        statuses = status_by_name(k8s.get_resource(ref))
+        assert statuses[WLM_JSON_CONFIGURATION]["source"] == "user"
 
-            # --- Update tags: change, remove and add ---
-            patch_and_assert_synced(ref, {
-                "spec": {
-                    "tags": [
-                        {"key": "environment", "value": "staging"},
-                        {"key": "owner", "value": "ack"},
-                    ],
+        # --- Update tags: change, remove and add ---
+        patch_and_assert_synced(ref, {
+            "spec": {
+                "tags": [
+                    {"key": "environment", "value": "staging"},
+                    {"key": "owner", "value": "ack"},
+                ],
+            },
+        })
+        assert_aws_tags(redshift_client, name, {"environment": "staging", "owner": "ack"})
+
+        # --- Description is create-only: an edit settles without effect ---
+        patch_and_assert_synced(ref, {
+            "spec": {"description": "an edited description"},
+        })
+        group = get_aws_group(redshift_client, name)
+        assert group["Description"] == v["description"]
+
+        # --- Delete ---
+        delete_and_assert_gone(redshift_client, ref, name)
+
+    def test_upper_case_name(self, redshift_client, upper_case_parameter_group):
+        ref, v = upper_case_parameter_group
+        name = v["aws_name"]
+
+        # The group is created under the lower-case name, and spec.name keeps
+        # the user's value rather than being overwritten by the API response.
+        assert_synced(ref)
+        cr = k8s.get_resource(ref)
+        assert cr["spec"]["name"] != name
+        assert cr["spec"]["name"].lower() == name
+        assert get_aws_group(redshift_client, name)["ParameterGroupName"] == name
+        # The ARN uses the lower-case name, which the tag APIs require.
+        assert cr["status"]["ackResourceMetadata"]["arn"].endswith(
+            f":parametergroup:{name}"
+        )
+        params = get_aws_parameters(redshift_client, name)
+        assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_1"]
+
+        # Parameter and tag updates both address the group by name or ARN.
+        patch_and_assert_synced(ref, {
+            "spec": {
+                "parameterOverrides": {
+                    STATEMENT_TIMEOUT: v["timeout_2"],
+                    USER_ACTIVITY_LOGGING: None,
                 },
-            })
-            group = get_aws_group(redshift_client, resource_name)
-            tagutil.assert_equal_without_ack_tags(
-                {"environment": "staging", "owner": "ack"},
-                {t["Key"]: t["Value"] for t in group.get("Tags", [])},
-            )
+                "tags": [{"key": "environment", "value": "staging"}],
+            },
+        })
+        params = get_aws_parameters(redshift_client, name)
+        assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_2"]
+        assert params[USER_ACTIVITY_LOGGING]["Source"] == "engine-default"
+        assert USER_ACTIVITY_LOGGING not in status_by_name(k8s.get_resource(ref))
+        assert_aws_tags(redshift_client, name, {"environment": "staging"})
 
-            # --- Description is create-only: an edit settles without effect ---
-            patch_and_assert_synced(ref, {
-                "spec": {"description": "an edited description"},
-            })
-            group = get_aws_group(redshift_client, resource_name)
-            assert group["Description"] == description
-        finally:
-            # --- Delete ---
-            k8s.delete_custom_resource(ref)
-            time.sleep(DELETE_WAIT_AFTER_SECONDS)
-
-        assert not k8s.get_resource_exists(ref)
-        with pytest.raises(ClientError) as exc:
-            redshift_client.describe_cluster_parameter_groups(
-                ParameterGroupName=resource_name,
-            )
-        assert exc.value.response["Error"]["Code"] == "ClusterParameterGroupNotFound"
+        delete_and_assert_gone(redshift_client, ref, name)
