@@ -1,0 +1,12 @@
+apiVersion: redshift.services.k8s.aws/v1alpha1
+kind: ClusterSubnetGroup
+metadata:
+  name: $CLUSTER_SUBNET_GROUP_NAME
+spec:
+  name: $CLUSTER_SUBNET_GROUP_NAME
+  description: $DESCRIPTION
+  subnetIDs:
+  - $SUBNET_ID_1
+  tags:
+  - key: "environment"
+    value: "test"

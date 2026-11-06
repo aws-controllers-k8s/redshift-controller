@@ -23,6 +23,34 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ec2.services.k8s.aws
+  resources:
+  - subnets
+  - subnets/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - redshift.services.k8s.aws
+  resources:
+  - clustersubnetgroups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - redshift.services.k8s.aws
+  resources:
+  - clustersubnetgroups/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - services.k8s.aws
   resources:
   - fieldexports
