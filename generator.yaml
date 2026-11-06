@@ -2,7 +2,6 @@ ignore:
   resource_names:
       - AuthenticationProfile
       - Cluster
-      - ClusterParameterGroup
       - ClusterSecurityGroup
       - ClusterSnapshot
       - CustomDomainAssociation
@@ -18,6 +17,58 @@ ignore:
       - SnapshotSchedule
       - UsageLimit
 resources:
+  ClusterParameterGroup:
+    fields:
+      Name:
+        is_primary_key: true
+        is_immutable: true
+        set:
+          - ignore: from
+      Family:
+        is_immutable: true
+      Description:
+        compare:
+          is_ignored: true
+      ParameterOverrides:
+        custom_field:
+          map_of: String
+      ParameterOverrideStatuses:
+        from:
+          operation: DescribeClusterParameters
+          path: Parameters
+        is_read_only: true
+    renames:
+      operations:
+        CreateClusterParameterGroup:
+          input_fields:
+            ParameterGroupName: Name
+            ParameterGroupFamily: Family
+        DescribeClusterParameterGroups:
+          input_fields:
+            ParameterGroupName: Name
+          output_fields:
+            ParameterGroupFamily: Family
+        ModifyClusterParameterGroup:
+          input_fields:
+            ParameterGroupName: Name
+        DeleteClusterParameterGroup:
+          input_fields:
+            ParameterGroupName: Name
+    exceptions:
+      errors:
+        404:
+          code: ClusterParameterGroupNotFound
+      terminal_codes:
+        - InvalidTagFault
+        - TagLimitExceededFault
+        - InvalidParameterValue
+    update_operation:
+      custom_method_name: customUpdateClusterParameterGroup
+    hooks:
+      sdk_create_post_set_output:
+        template_path: hooks/cluster_parameter_group/sdk_create_post_set_output.go.tpl
+      sdk_read_many_post_set_output:
+        template_path: hooks/cluster_parameter_group/sdk_read_many_post_set_output.go.tpl
   ClusterSubnetGroup:
     fields:
       Name:

@@ -80,6 +80,7 @@ rules:
 - apiGroups:
   - redshift.services.k8s.aws
   resources:
+  - clusterparametergroups
   - clustersubnetgroups
   verbs:
   - create
@@ -92,6 +93,7 @@ rules:
 - apiGroups:
   - redshift.services.k8s.aws
   resources:
+  - clusterparametergroups/status
   - clustersubnetgroups/status
   verbs:
   - get
