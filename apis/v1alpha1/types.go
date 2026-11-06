@@ -59,7 +59,8 @@ type AuthorizedTokenIssuer struct {
 
 // Describes an availability zone.
 type AvailabilityZone struct {
-	Name *string `json:"name,omitempty"`
+	Name               *string              `json:"name,omitempty"`
+	SupportedPlatforms []*SupportedPlatform `json:"supportedPlatforms,omitempty"`
 }
 
 // A cluster ID and custom domain name tied to a specific certificate. These
@@ -71,7 +72,6 @@ type CertificateAssociation struct {
 
 // Describes a cluster.
 type Cluster struct {
-	AllowVersionUpgrade                    *bool   `json:"allowVersionUpgrade,omitempty"`
 	AvailabilityZone                       *string `json:"availabilityZone,omitempty"`
 	AvailabilityZoneRelocationStatus       *string `json:"availabilityZoneRelocationStatus,omitempty"`
 	CatalogARN                             *string `json:"catalogARN,omitempty"`
@@ -88,8 +88,6 @@ type Cluster struct {
 	DBName                                 *string `json:"dbName,omitempty"`
 	DefaultIAMRoleARN                      *string `json:"defaultIAMRoleARN,omitempty"`
 	ElasticResizeNumberOfNodeOptions       *string `json:"elasticResizeNumberOfNodeOptions,omitempty"`
-	Encrypted                              *bool   `json:"encrypted,omitempty"`
-	EnhancedVPCRouting                     *bool   `json:"enhancedVPCRouting,omitempty"`
 	ExpectedNextSnapshotScheduleTimeStatus *string `json:"expectedNextSnapshotScheduleTimeStatus,omitempty"`
 	ExtraComputeForAutomaticOptimization   *string `json:"extraComputeForAutomaticOptimization,omitempty"`
 	IPAddressType                          *string `json:"ipAddressType,omitempty"`
@@ -103,7 +101,6 @@ type Cluster struct {
 	MultiAZ                                *string `json:"multiAZ,omitempty"`
 	NodeType                               *string `json:"nodeType,omitempty"`
 	PreferredMaintenanceWindow             *string `json:"preferredMaintenanceWindow,omitempty"`
-	PubliclyAccessible                     *bool   `json:"publiclyAccessible,omitempty"`
 	SnapshotScheduleIdentifier             *string `json:"snapshotScheduleIdentifier,omitempty"`
 	Tags                                   []*Tag  `json:"tags,omitempty"`
 	VPCID                                  *string `json:"vpcID,omitempty"`
@@ -133,18 +130,18 @@ type ClusterNode struct {
 	PublicIPAddress  *string `json:"publicIPAddress,omitempty"`
 }
 
-// Describes the status of a parameter group.
-type ClusterParameterGroupStatus_SDK struct {
-	ParameterApplyStatus *string `json:"parameterApplyStatus,omitempty"`
-	ParameterGroupName   *string `json:"parameterGroupName,omitempty"`
-}
-
 // Describes a parameter group.
-type ClusterParameterGroup_SDK struct {
+type ClusterParameterGroup struct {
 	Description          *string `json:"description,omitempty"`
 	ParameterGroupFamily *string `json:"parameterGroupFamily,omitempty"`
 	ParameterGroupName   *string `json:"parameterGroupName,omitempty"`
 	Tags                 []*Tag  `json:"tags,omitempty"`
+}
+
+// Describes the status of a parameter group.
+type ClusterParameterGroupStatus struct {
+	ParameterApplyStatus *string `json:"parameterApplyStatus,omitempty"`
+	ParameterGroupName   *string `json:"parameterGroupName,omitempty"`
 }
 
 // Describes the status of a parameter group.
@@ -175,12 +172,14 @@ type ClusterSnapshotCopyStatus struct {
 }
 
 // Describes a subnet group.
-type ClusterSubnetGroup struct {
-	ClusterSubnetGroupName *string `json:"clusterSubnetGroupName,omitempty"`
-	Description            *string `json:"description,omitempty"`
-	SubnetGroupStatus      *string `json:"subnetGroupStatus,omitempty"`
-	Tags                   []*Tag  `json:"tags,omitempty"`
-	VPCID                  *string `json:"vpcID,omitempty"`
+type ClusterSubnetGroup_SDK struct {
+	ClusterSubnetGroupName         *string   `json:"clusterSubnetGroupName,omitempty"`
+	Description                    *string   `json:"description,omitempty"`
+	SubnetGroupStatus              *string   `json:"subnetGroupStatus,omitempty"`
+	Subnets                        []*Subnet `json:"subnets,omitempty"`
+	SupportedClusterIPAddressTypes []*string `json:"supportedClusterIPAddressTypes,omitempty"`
+	Tags                           []*Tag    `json:"tags,omitempty"`
+	VPCID                          *string   `json:"vpcID,omitempty"`
 }
 
 // Describes a cluster version, including the parameter group family and description
@@ -192,10 +191,9 @@ type ClusterVersion struct {
 }
 
 type DataShare struct {
-	AllowPubliclyAccessibleConsumers *bool   `json:"allowPubliclyAccessibleConsumers,omitempty"`
-	DataShareARN                     *string `json:"dataShareARN,omitempty"`
-	ManagedBy                        *string `json:"managedBy,omitempty"`
-	ProducerARN                      *string `json:"producerARN,omitempty"`
+	DataShareARN *string `json:"dataShareARN,omitempty"`
+	ManagedBy    *string `json:"managedBy,omitempty"`
+	ProducerARN  *string `json:"producerARN,omitempty"`
 }
 
 // The association of a datashare from a producer account with a data consumer.
@@ -212,9 +210,8 @@ type DataTransferProgress struct {
 
 // Describes the default cluster parameters for a parameter group family.
 type DefaultClusterParameters struct {
-	Marker               *string      `json:"marker,omitempty"`
-	ParameterGroupFamily *string      `json:"parameterGroupFamily,omitempty"`
-	Parameters           []*Parameter `json:"parameters,omitempty"`
+	Marker               *string `json:"marker,omitempty"`
+	ParameterGroupFamily *string `json:"parameterGroupFamily,omitempty"`
 }
 
 // Describes a deferred maintenance window
@@ -259,7 +256,6 @@ type EndpointAccess struct {
 // Describes an endpoint authorization for authorizing Redshift-managed VPC
 // endpoint access to a cluster across Amazon Web Services accounts.
 type EndpointAuthorization struct {
-	AllowedAllVPCs    *bool   `json:"allowedAllVPCs,omitempty"`
 	ClusterIdentifier *string `json:"clusterIdentifier,omitempty"`
 	ClusterStatus     *string `json:"clusterStatus,omitempty"`
 	Grantee           *string `json:"grantee,omitempty"`
@@ -290,7 +286,6 @@ type EventInfoMap struct {
 type EventSubscription struct {
 	CustSubscriptionID *string `json:"custSubscriptionID,omitempty"`
 	CustomerAWSID      *string `json:"customerAWSID,omitempty"`
-	Enabled            *bool   `json:"enabled,omitempty"`
 	Severity           *string `json:"severity,omitempty"`
 	SNSTopicARN        *string `json:"snsTopicARN,omitempty"`
 	SourceType         *string `json:"sourceType,omitempty"`
@@ -372,6 +367,11 @@ type NodeConfigurationOption struct {
 	NodeType *string `json:"nodeType,omitempty"`
 }
 
+// A set of elements to filter the returned node configurations.
+type NodeConfigurationOptionsFilter struct {
+	Values []*string `json:"values,omitempty"`
+}
+
 // Describes an orderable cluster option.
 type OrderableClusterOption struct {
 	ClusterType    *string `json:"clusterType,omitempty"`
@@ -382,10 +382,8 @@ type OrderableClusterOption struct {
 // Describes a parameter in a cluster parameter group.
 type Parameter struct {
 	AllowedValues        *string `json:"allowedValues,omitempty"`
-	ApplyType            *string `json:"applyType,omitempty"`
 	DataType             *string `json:"dataType,omitempty"`
 	Description          *string `json:"description,omitempty"`
-	IsModifiable         *bool   `json:"isModifiable,omitempty"`
 	MinimumEngineVersion *string `json:"minimumEngineVersion,omitempty"`
 	ParameterName        *string `json:"parameterName,omitempty"`
 	ParameterValue       *string `json:"parameterValue,omitempty"`
@@ -511,8 +509,7 @@ type ResizeClusterMessage struct {
 
 // Describes a resize operation.
 type ResizeInfo struct {
-	AllowCancelResize *bool   `json:"allowCancelResize,omitempty"`
-	ResizeType        *string `json:"resizeType,omitempty"`
+	ResizeType *string `json:"resizeType,omitempty"`
 }
 
 // The policy that is attached to a resource.
@@ -555,6 +552,11 @@ type ScheduledAction struct {
 	ScheduledActionName        *string `json:"scheduledActionName,omitempty"`
 }
 
+// A set of elements to filter the returned scheduled actions.
+type ScheduledActionFilter struct {
+	Values []*string `json:"values,omitempty"`
+}
+
 // The AvailabilityZone and ClusterNodes information of the secondary compute
 // unit.
 type SecondaryClusterInfo struct {
@@ -573,10 +575,7 @@ type Snapshot struct {
 	ClusterIdentifier             *string `json:"clusterIdentifier,omitempty"`
 	ClusterVersion                *string `json:"clusterVersion,omitempty"`
 	DBName                        *string `json:"dbName,omitempty"`
-	Encrypted                     *bool   `json:"encrypted,omitempty"`
-	EncryptedWithHSM              *bool   `json:"encryptedWithHSM,omitempty"`
 	EngineFullVersion             *string `json:"engineFullVersion,omitempty"`
-	EnhancedVPCRouting            *bool   `json:"enhancedVPCRouting,omitempty"`
 	KMSKeyID                      *string `json:"kmsKeyID,omitempty"`
 	MaintenanceTrackName          *string `json:"maintenanceTrackName,omitempty"`
 	ManualSnapshotRemainingDays   *int64  `json:"manualSnapshotRemainingDays,omitempty"`
@@ -627,8 +626,10 @@ type SnapshotSchedule struct {
 
 // Describes a subnet.
 type Subnet struct {
-	SubnetIdentifier *string `json:"subnetIdentifier,omitempty"`
-	SubnetStatus     *string `json:"subnetStatus,omitempty"`
+	// Describes an availability zone.
+	SubnetAvailabilityZone *AvailabilityZone `json:"subnetAvailabilityZone,omitempty"`
+	SubnetIdentifier       *string           `json:"subnetIdentifier,omitempty"`
+	SubnetStatus           *string           `json:"subnetStatus,omitempty"`
 }
 
 // Describes the operations that are allowed on a maintenance track.

@@ -9,7 +9,7 @@ rules:
 - apiGroups:
   - redshift.services.k8s.aws
   resources:
-  - clusterparametergroups
+  - clustersubnetgroups
   verbs:
   - create
   - delete
@@ -21,7 +21,7 @@ rules:
 - apiGroups:
   - redshift.services.k8s.aws
   resources:
-  - clusterparametergroups
+  - clustersubnetgroups
   verbs:
   - get
   - patch

@@ -70,9 +70,17 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ec2.services.k8s.aws
+  resources:
+  - subnets
+  - subnets/status
+  verbs:
+  - get
+  - list
+- apiGroups:
   - redshift.services.k8s.aws
   resources:
-  - clusterparametergroups
+  - clustersubnetgroups
   verbs:
   - create
   - delete
@@ -84,7 +92,7 @@ rules:
 - apiGroups:
   - redshift.services.k8s.aws
   resources:
-  - clusterparametergroups/status
+  - clustersubnetgroups/status
   verbs:
   - get
   - patch

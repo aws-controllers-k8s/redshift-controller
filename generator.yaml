@@ -4,7 +4,6 @@ ignore:
       - Cluster
       - ClusterSecurityGroup
       - ClusterSnapshot
-      - ClusterSubnetGroup
       - CustomDomainAssociation
       - EndpointAccess
       - EventSubscription
@@ -23,6 +22,8 @@ resources:
       Name:
         is_primary_key: true
         is_immutable: true
+        set:
+          - ignore: from
       Family:
         is_immutable: true
       Description:
@@ -58,19 +59,56 @@ resources:
         404:
           code: ClusterParameterGroupNotFound
       terminal_codes:
-        - ClusterParameterGroupAlreadyExists
-        - ClusterParameterGroupQuotaExceeded
         - InvalidTagFault
         - TagLimitExceededFault
         - InvalidParameterValue
     update_operation:
       custom_method_name: customUpdateClusterParameterGroup
     hooks:
-      sdk_create_pre_build_request:
-        template_path: hooks/cluster_parameter_group/sdk_create_pre_build_request.go.tpl
       sdk_create_post_set_output:
         template_path: hooks/cluster_parameter_group/sdk_create_post_set_output.go.tpl
-      sdk_read_many_pre_build_request:
-        template_path: hooks/cluster_parameter_group/sdk_read_many_pre_build_request.go.tpl
       sdk_read_many_post_set_output:
         template_path: hooks/cluster_parameter_group/sdk_read_many_post_set_output.go.tpl
+  ClusterSubnetGroup:
+    fields:
+      Name:
+        is_primary_key: true
+        is_immutable: true
+        set:
+          - ignore: from
+      SubnetIDs:
+        references:
+          service_name: ec2
+          resource: Subnet
+          path: Status.SubnetID
+      Tags:
+        custom_sync: {}
+    renames:
+      operations:
+        CreateClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+          output_fields:
+            SubnetGroupStatus: Status
+        DescribeClusterSubnetGroups:
+          input_fields:
+            ClusterSubnetGroupName: Name
+          output_fields:
+            SubnetGroupStatus: Status
+        ModifyClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+          output_fields:
+            SubnetGroupStatus: Status
+        DeleteClusterSubnetGroup:
+          input_fields:
+            ClusterSubnetGroupName: Name
+    exceptions:
+      errors:
+        404:
+          code: ClusterSubnetGroupNotFoundFault
+      terminal_codes:
+        - InvalidSubnet
+    hooks:
+      sdk_read_many_post_set_output:
+        template_path: hooks/cluster_subnet_group/sdk_read_many_post_set_output.go.tpl
