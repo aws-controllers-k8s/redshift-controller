@@ -228,3 +228,71 @@ func TestParameterGroupARN(t *testing.T) {
 		t.Errorf("parameterGroupARN = %q, want %q", got, want)
 	}
 }
+
+func TestEquivalentParameterValue(t *testing.T) {
+	boolean, str := aws.String("boolean"), aws.String("string")
+	for _, tc := range []struct {
+		name               string
+		dataType           *string
+		declared, observed string
+		want               bool
+	}{
+		{"statement_timeout", aws.String("integer"), "30000", "30000", true},
+		{"statement_timeout", aws.String("integer"), "30000", "45000", false},
+		{"enable_user_activity_logging", boolean, "TRUE", "true", true},
+		{"enable_user_activity_logging", boolean, "False", "false", true},
+		{"enable_user_activity_logging", boolean, "true", "false", false},
+		// Case is significant for non-boolean values.
+		{"search_path", str, "$USER", "$user", false},
+		{wlmJSONConfiguration, str, `[ {"query_concurrency": 5}, {"short_query_queue": true} ]`,
+			`[{"query_concurrency":5},{"short_query_queue":true}]`, true},
+		{wlmJSONConfiguration, str, `[{"query_concurrency":5}]`, `[{"query_concurrency":6}]`, false},
+		{wlmJSONConfiguration, str, `not json`, `[]`, false},
+		// JSON equivalence applies only to wlm_json_configuration.
+		{"other_json", str, `[ 1 ]`, `[1]`, false},
+	} {
+		if got := equivalentParameterValue(tc.name, tc.dataType, tc.declared, tc.observed); got != tc.want {
+			t.Errorf("equivalentParameterValue(%s, %q, %q) = %v, want %v",
+				tc.name, tc.declared, tc.observed, got, tc.want)
+		}
+	}
+}
+
+// TestFilterParametersKeepsEquivalentDeclaredValue checks that a value AWS
+// rewrites (boolean case, compacted WLM JSON) keeps the declared form in the
+// overrides so the delta closes, while the status reports what AWS returned.
+func TestFilterParametersKeepsEquivalentDeclaredValue(t *testing.T) {
+	wlmDeclared := `[ {"query_concurrency": 5} ]`
+	params := []svcsdktypes.Parameter{
+		{ParameterName: aws.String("enable_user_activity_logging"), ParameterValue: aws.String("true"),
+			DataType: aws.String("boolean"), Source: aws.String("user")},
+		{ParameterName: aws.String(wlmJSONConfiguration), ParameterValue: aws.String(`[{"query_concurrency":5}]`),
+			DataType: aws.String("string"), Source: aws.String("user")},
+		{ParameterName: aws.String("statement_timeout"), ParameterValue: aws.String("45000"),
+			DataType: aws.String("integer"), Source: aws.String("user")},
+	}
+	declared := map[string]*string{
+		"enable_user_activity_logging": aws.String("TRUE"),
+		wlmJSONConfiguration:           aws.String(wlmDeclared),
+		"statement_timeout":            aws.String("30000"),
+	}
+
+	overrides, statuses := filterParameters(params, declared)
+	wantOverrides := map[string]*string{
+		"enable_user_activity_logging": aws.String("TRUE"),
+		wlmJSONConfiguration:           aws.String(wlmDeclared),
+		// A real difference still reports the AWS value, so Modify is sent.
+		"statement_timeout": aws.String("45000"),
+	}
+	if !reflect.DeepEqual(overrides, wantOverrides) {
+		t.Errorf("overrides = %v, want %v", overrides, wantOverrides)
+	}
+	for _, s := range statuses {
+		if *s.ParameterName == "enable_user_activity_logging" && *s.ParameterValue != "true" {
+			t.Errorf("status value = %q, want the AWS value %q", *s.ParameterValue, "true")
+		}
+	}
+	if _, toModify := diffParameters(declared, overrides); len(toModify) != 1 || toModify["statement_timeout"] != "30000" {
+		t.Errorf("toModify = %v, want only statement_timeout", toModify)
+	}
+}

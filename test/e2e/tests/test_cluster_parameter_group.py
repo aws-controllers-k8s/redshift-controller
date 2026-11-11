@@ -19,6 +19,7 @@ import time
 
 import pytest
 from botocore.exceptions import ClientError
+from kubernetes.client.rest import ApiException
 
 from acktest import tags as tagutil
 from acktest.k8s import condition
@@ -37,8 +38,9 @@ SYNC_PERIOD_LENGTH = 10
 STATEMENT_TIMEOUT = "statement_timeout"
 USER_ACTIVITY_LOGGING = "enable_user_activity_logging"
 WLM_JSON_CONFIGURATION = "wlm_json_configuration"
-# One manual WLM queue with a concurrency level of five.
-WLM_VALUE = '[{"query_concurrency":5}]'
+# One manual WLM queue with a concurrency level of five, with whitespace that
+# Redshift strips when it stores the value.
+WLM_VALUE = '[ {"query_concurrency": 5} ]'
 STABILITY_WAIT_SECONDS = 30
 
 
@@ -120,6 +122,18 @@ def assert_synced(ref):
     )
 
 
+def assert_settled(ref):
+    # Every reconcile clears conditions and stamps Synced with the current
+    # time, so an unchanged lastTransitionTime means no reconcile ran, i.e. no
+    # perpetual diff re-sending Modify.
+    settled = condition.get_synced_last_transition_time(ref)
+    time.sleep(STABILITY_WAIT_SECONDS)
+    assert k8s.wait_on_condition(
+        ref, "ACK.ResourceSynced", "True", wait_periods=1, period_length=1,
+    )
+    assert condition.get_synced_last_transition_time(ref) == settled
+
+
 def patch_and_assert_synced(ref, patch):
     # Wait for a Synced=True written by a reconcile that ran after the patch,
     # not one left over from the previous generation.
@@ -153,6 +167,9 @@ def make_parameter_group(redshift_client, spec_name=None):
         "timeout_2": pick_different(timeout_default, "60000", "75000"),
         "logging_default": logging_default,
         "logging_value": "true" if logging_default == "false" else "false",
+        # Redshift stores booleans in lower case, so declare it upper case to
+        # check the controller treats the two as equal.
+        "logging_declared": "TRUE" if logging_default == "false" else "FALSE",
         "wlm_value": pick_different(
             defaults[WLM_JSON_CONFIGURATION].get("ParameterValue"), WLM_VALUE,
         ),
@@ -164,7 +181,7 @@ def make_parameter_group(redshift_client, spec_name=None):
     replacements["FAMILY"] = family
     replacements["DESCRIPTION"] = values["description"]
     replacements["PARAM_STATEMENT_TIMEOUT"] = values["timeout_1"]
-    replacements["PARAM_ENABLE_USER_ACTIVITY_LOGGING"] = values["logging_value"]
+    replacements["PARAM_ENABLE_USER_ACTIVITY_LOGGING"] = values["logging_declared"]
     resource_data = load_redshift_resource(
         "cluster_parameter_group",
         additional_replacements=replacements,
@@ -277,20 +294,29 @@ class TestClusterParameterGroup:
             assert s["isModifiable"] is True
             assert s["applyType"] in {"static", "dynamic"}
 
-        # --- Update parameters: change one, remove the other ---
-        # A merge-patch null deletes the map key, which must reset that
-        # parameter alone and leave the changed one in place.
+        # --- Update one parameter while the upper-case boolean stays declared.
+        # Redshift returns it in lower case; only the update path compares it
+        # against AWS, and a byte comparison would re-send Modify every 5s ---
         patch_and_assert_synced(ref, {
-            "spec": {
-                "parameterOverrides": {
-                    STATEMENT_TIMEOUT: v["timeout_2"],
-                    USER_ACTIVITY_LOGGING: None,
-                },
-            },
+            "spec": {"parameterOverrides": {STATEMENT_TIMEOUT: v["timeout_2"]}},
         })
         params = get_aws_parameters(redshift_client, name)
         assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_2"]
         assert params[STATEMENT_TIMEOUT]["Source"] == "user"
+        assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == v["logging_value"]
+        assert_settled(ref)
+        cr = k8s.get_resource(ref)
+        assert cr["spec"]["parameterOverrides"][USER_ACTIVITY_LOGGING] == v["logging_declared"]
+        assert status_by_name(cr)[USER_ACTIVITY_LOGGING]["parameterValue"] == v["logging_value"]
+
+        # --- Remove a parameter ---
+        # A merge-patch null deletes the map key, which must reset that
+        # parameter alone and leave the other one in place.
+        patch_and_assert_synced(ref, {
+            "spec": {"parameterOverrides": {USER_ACTIVITY_LOGGING: None}},
+        })
+        params = get_aws_parameters(redshift_client, name)
+        assert params[STATEMENT_TIMEOUT]["ParameterValue"] == v["timeout_2"]
         assert params[USER_ACTIVITY_LOGGING]["ParameterValue"] == v["logging_default"]
         assert params[USER_ACTIVITY_LOGGING]["Source"] == "engine-default"
         # Without the post-sync requeue this would read the pre-update
@@ -299,8 +325,8 @@ class TestClusterParameterGroup:
         assert statuses[STATEMENT_TIMEOUT]["parameterValue"] == v["timeout_2"]
         assert USER_ACTIVITY_LOGGING not in statuses
 
-        # --- WLM JSON: AWS may re-serialize the body, which would make the
-        # string comparison loop instead of settling ---
+        # --- WLM JSON: Redshift strips whitespace when storing the body, so a
+        # string comparison would loop instead of settling ---
         wlm_value = v["wlm_value"]
         patch_and_assert_synced(ref, {
             "spec": {"parameterOverrides": {WLM_JSON_CONFIGURATION: wlm_value}},
@@ -309,18 +335,9 @@ class TestClusterParameterGroup:
         observed = params[WLM_JSON_CONFIGURATION]["ParameterValue"]
         assert json.loads(observed) == json.loads(wlm_value)
         assert params[WLM_JSON_CONFIGURATION]["Source"] == "user"
-        logging.info(
-            f"wlm_json_configuration returned byte-identical: {observed == wlm_value}"
-        )
-        # Every reconcile clears conditions and stamps Synced with the current
-        # time, so an unchanged lastTransitionTime means no reconcile ran,
-        # i.e. no perpetual diff.
-        settled = condition.get_synced_last_transition_time(ref)
-        time.sleep(STABILITY_WAIT_SECONDS)
-        assert k8s.wait_on_condition(
-            ref, "ACK.ResourceSynced", "True", wait_periods=1, period_length=1,
-        )
-        assert condition.get_synced_last_transition_time(ref) == settled
+        assert observed != wlm_value, "expected Redshift to compact the WLM JSON"
+        assert_settled(ref)
+        assert k8s.get_resource(ref)["spec"]["parameterOverrides"][WLM_JSON_CONFIGURATION] == wlm_value
         statuses = status_by_name(k8s.get_resource(ref))
         assert statuses[WLM_JSON_CONFIGURATION]["source"] == "user"
 
@@ -335,10 +352,14 @@ class TestClusterParameterGroup:
         })
         assert_aws_tags(redshift_client, name, {"environment": "staging", "owner": "ack"})
 
-        # --- Description is create-only: an edit settles without effect ---
-        patch_and_assert_synced(ref, {
-            "spec": {"description": "an edited description"},
-        })
+        # --- Description is immutable: Modify has no Description input, so
+        # an edit is rejected at admission rather than silently ignored ---
+        with pytest.raises(ApiException) as exc:
+            k8s.patch_custom_resource(ref, {
+                "spec": {"description": "an edited description"},
+            })
+        assert exc.value.status == 422
+        assert "immutable" in exc.value.body
         group = get_aws_group(redshift_client, name)
         assert group["Description"] == v["description"]
 

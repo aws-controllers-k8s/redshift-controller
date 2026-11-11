@@ -15,7 +15,9 @@ package cluster_parameter_group
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +36,10 @@ import (
 // maxParametersPerCall is the most parameters ModifyClusterParameterGroup and
 // ResetClusterParameterGroup accept in a single request.
 const maxParametersPerCall = 20
+
+// wlmJSONConfiguration is the parameter whose value Redshift stores as
+// re-serialized JSON.
+const wlmJSONConfiguration = "wlm_json_configuration"
 
 var (
 	errParametersModified = fmt.Errorf("parameter overrides modified, requeuing to refresh status")
@@ -177,7 +183,10 @@ func (rm *resourceManager) getParameterOverrides(
 // filterParameters keeps the parameters the user changed (Source "user") plus
 // any the CR declares, and returns them as overrides and as statuses sorted by
 // name. Declared names are kept regardless of Source so a declared value equal
-// to the engine default still compares equal and the delta closes.
+// to the engine default still compares equal and the delta closes. A declared
+// value that AWS stores in a different but equivalent form (see
+// equivalentParameterValue) is kept as declared for the same reason; the
+// status still reports the value AWS returned.
 func filterParameters(
 	params []svcsdktypes.Parameter,
 	declared map[string]*string,
@@ -188,11 +197,16 @@ func filterParameters(
 		if p.ParameterName == nil || p.ParameterValue == nil {
 			continue
 		}
-		_, isDeclared := declared[*p.ParameterName]
+		declaredValue, isDeclared := declared[*p.ParameterName]
 		if !isDeclared && aws.ToString(p.Source) != "user" {
 			continue
 		}
 		overrides[*p.ParameterName] = p.ParameterValue
+		if declaredValue != nil && equivalentParameterValue(
+			*p.ParameterName, p.DataType, *declaredValue, *p.ParameterValue,
+		) {
+			overrides[*p.ParameterName] = aws.String(*declaredValue)
+		}
 		var applyType *string
 		if p.ApplyType != "" {
 			applyType = aws.String(string(p.ApplyType))
@@ -212,6 +226,27 @@ func filterParameters(
 		return *statuses[i].ParameterName < *statuses[j].ParameterName
 	})
 	return overrides, statuses
+}
+
+// equivalentParameterValue reports whether a declared value and the value AWS
+// returns are the same setting. Redshift stores boolean values in lower case
+// and re-serializes wlm_json_configuration, so a byte comparison would leave
+// the delta open and re-send Modify on every reconcile.
+func equivalentParameterValue(name string, dataType *string, declared, observed string) bool {
+	if declared == observed {
+		return true
+	}
+	if aws.ToString(dataType) == "boolean" {
+		return strings.EqualFold(declared, observed)
+	}
+	if name == wlmJSONConfiguration {
+		var d, o interface{}
+		if json.Unmarshal([]byte(declared), &d) != nil || json.Unmarshal([]byte(observed), &o) != nil {
+			return false
+		}
+		return reflect.DeepEqual(d, o)
+	}
+	return false
 }
 
 // syncParameters resets parameters dropped from the spec, then modifies the

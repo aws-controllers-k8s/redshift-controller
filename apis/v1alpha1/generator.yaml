@@ -27,6 +27,7 @@ resources:
       Family:
         is_immutable: true
       Description:
+        is_immutable: true
         compare:
           is_ignored: true
       ParameterOverrides:

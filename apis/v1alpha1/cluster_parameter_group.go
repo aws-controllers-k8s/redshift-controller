@@ -26,6 +26,7 @@ import (
 type ClusterParameterGroupSpec struct {
 
 	// A description of the parameter group.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable once set"
 	// +kubebuilder:validation:Required
 	Description *string `json:"description"`
 	// The Amazon Redshift engine version to which the cluster parameter group applies.
