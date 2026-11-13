@@ -15,9 +15,7 @@ package cluster_parameter_group
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -240,11 +238,8 @@ func equivalentParameterValue(name string, dataType *string, declared, observed 
 		return strings.EqualFold(declared, observed)
 	}
 	if name == wlmJSONConfiguration {
-		var d, o interface{}
-		if json.Unmarshal([]byte(declared), &d) != nil || json.Unmarshal([]byte(observed), &o) != nil {
-			return false
-		}
-		return reflect.DeepEqual(d, o)
+		equal, err := ackcompare.DocumentEqual(declared, observed)
+		return err == nil && equal
 	}
 	return false
 }
