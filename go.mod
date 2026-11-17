@@ -4,6 +4,8 @@ go 1.26.0
 
 require (
 	github.com/aws-controllers-k8s/ec2-controller v1.23.0
+	github.com/aws-controllers-k8s/iam-controller v1.9.0
+	github.com/aws-controllers-k8s/kms-controller v1.8.0
 	github.com/aws-controllers-k8s/runtime v0.68.0
 	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/aws/aws-sdk-go-v2/service/redshift v1.71.6
