@@ -72,8 +72,28 @@ rules:
 - apiGroups:
   - ec2.services.k8s.aws
   resources:
+  - elasticipaddresses
+  - elasticipaddresses/status
+  - securitygroups
+  - securitygroups/status
   - subnets
   - subnets/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - iam.services.k8s.aws
+  resources:
+  - roles
+  - roles/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - kms.services.k8s.aws
+  resources:
+  - keys
+  - keys/status
   verbs:
   - get
   - list
@@ -81,6 +101,7 @@ rules:
   - redshift.services.k8s.aws
   resources:
   - clusterparametergroups
+  - clusters
   - clustersubnetgroups
   verbs:
   - create
@@ -94,6 +115,7 @@ rules:
   - redshift.services.k8s.aws
   resources:
   - clusterparametergroups/status
+  - clusters/status
   - clustersubnetgroups/status
   verbs:
   - get

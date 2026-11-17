@@ -1,0 +1,22 @@
+apiVersion: redshift.services.k8s.aws/v1alpha1
+kind: Cluster
+metadata:
+  name: $CLUSTER_NAME
+  annotations:
+    # Without this the DeleteCluster call needs a final snapshot identifier.
+    redshift.services.k8s.aws/skip-final-snapshot: "true"
+spec:
+  identifier: $CLUSTER_NAME
+  masterUsername: ackadmin
+  masterUserPassword:
+    namespace: default
+    name: $PASSWORD_SECRET_NAME
+    key: password
+  nodeType: ra3.large
+  publiclyAccessible: false
+  clusterSubnetGroupRef:
+    from:
+      name: $CLUSTER_SUBNET_GROUP_NAME
+  tags:
+  - key: "environment"
+    value: "test"
